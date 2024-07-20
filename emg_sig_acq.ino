@@ -3,13 +3,9 @@
  * The following code is used to process and output wirelessly (via Bluetooth)
  * EMG signals measured by external electrodes attached to the user's arm. The
  * microcontroller used in this project is an ESP32 (Espressif) and the code was
- * developed in the Arduino IDE (and therefore uses functions from the Arduino
- * standard library).
+ * developed through the Arduino IDE (and therefore uses functions from the
+ * Arduino standard library).
  *
- * Only one electrode is being considered in this version of the code - utilizing
- * more electrodes requires the reevaluation of the sampling time and further
- * adjustments to the code logic (setting up more input pins, reading and
- * processing each channel).
 */
 
 #include "BluetoothSerial.h"
@@ -19,7 +15,7 @@
 Calculated based off of the EMG signal frequency distribution and
 Nyquist-Shannon sampling theorem applied to multiple signal sources
 */
-const int Ts = 200;
+const unsigned long Ts = 125;
 
 //Cutoff frequency of EWMA filter:
 float fc = 500;
@@ -28,16 +24,12 @@ float fc = 500;
 float Nm = floor((1/(Ts*0.000001))/(2*fc));
 float invNm = 1/Nm;
 
-float mmex = 0;
-
 //Electrode DC voltage read value:
 /*
 Equal to the voltage read by the microcontroller's ADC when no movement
 is being made. Utilized to rectify the alternating EMG signal.
 */
 float dc = 0;
-
-BluetoothSerial SerialBT;
 
 //Rectfying function:
 /*
@@ -48,36 +40,67 @@ float retf(float meas){
   return abs(meas - dc);
 }
 
-void setup(){
-  //Input pins (one for each electrode):
-  pinMode(0, INPUT);
+//Struct vector (stores each channel's information and data) with lenght
+//equal to the number of electrodes
 
-  //Output pins (to generate the reference voltage applied to the user's body):
+typedef struct{
+	int pinNUMBER;
+	float readVALUE;
+	float ewma = 0.0;
+} boards;
+boards electrode[6];
+
+//Inital pin configuration function
+void initPINS(){
+  electrode[0].pinNUMBER = 32;
+  electrode[1].pinNUMBER = 33;
+  electrode[2].pinNUMBER = 34;
+  electrode[3].pinNUMBER = 35;
+  electrode[4].pinNUMBER = 36;
+  electrode[5].pinNUMBER = 39;
+  for(int i = 0; i < 6; i++){
+    pinMode(electrode[i].pinNUMBER, INPUT);
+  }
+
   pinMode(25, OUTPUT);
-  dacWrite(25, 128);
 
-  Serial.begin(1000000);
+  //Outputs the reference voltage through pin 25's DAC
+  dacWrite(25, 128);
+}
+
+BluetoothSerial SerialBT;
+
+//Signal acquisition, processing and transmission function
+void readTX(){
+  for(int i = 0; i < 6; i++){
+    //Reads each channel's electrode
+    electrode[i].readVALUE = float(analogRead(electrode[i].pinNUMBER));
+    
+    //Applies the rectifying function to the collected value
+    electrode[i].readVALUE = retf(electrode[i].readVALUE);
+
+    //Applies the EWMA low-pass filter to the rectified value
+    electrode[i].ewma = (electrode[i].readVALUE * (invNm)) + (electrode[i].ewma * (1-invNm))]
+    SerialBT.println(electrode[i].ewma);
+  }
+}
+
+void setup(){
+  initPINS();
+
+  Serial.begin(115200);
 
   //Name given to the microcontroller's Bluetooth ID:
-  SerialBT.begin("esp-protese");
+  SerialBT.begin("espPROTESE");
 }
 
 void loop(){
-  //Time at the start of the loop cycle (in microseconds):
-  int tempo_atual = micros();
+  //Stores the time at the start of the loop cycle (in microseconds):
+  unsigned long tempo_atual = micros();
 
-  //Applies the rectifying function to the electrode measurement:
-  float val_atual = retf(analogRead(0));
+  readTX();
 
-  //Applies the EWMA low pass filter:
-  mmex = (val_atual*(invNm))+(mmex*(1-invNm));
-
-  //Outputs the filtered and unfiltered data through Bluetooth
-  SerialBT.print(val_atual);
-  SerialBT.print(",");
-  SerialBT.println(mmex);
-
-  //Waits until the loop time is greater than the sampling time to restart the loop
+  //Waits until the loop time reaches the sampling period to restart the loop
   while(micros() - tempo_atual < Ts){
   }
 }
